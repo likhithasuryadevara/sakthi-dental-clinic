@@ -37,13 +37,25 @@ async function connectDB() {
     return;
   }
 
-  if (!process.env.MONGODB_URI) {
+  const uri = process.env.MONGODB_URI || "";
+
+  if (!uri.trim()) {
     throw new Error("MONGODB_URI environment variable is missing");
   }
 
+  // Safe MongoDB URI diagnostics (never logs credentials)
+  console.log("MongoDB URI diagnostic:", {
+    exists: Boolean(uri),
+    validPrefix: /^mongodb(\+srv)?:\/\//i.test(uri.trim()),
+    hasLeadingWhitespace: uri !== uri.trim(),
+    hasQuotes: /^["']/.test(uri.trim()),
+    hasVariableName: uri.startsWith("MONGODB_URI="),
+    length: uri.length,
+  });
+
   if (!connectionPromise) {
     connectionPromise = mongoose
-      .connect(process.env.MONGODB_URI, {
+      .connect(uri.trim(), {
         serverSelectionTimeoutMS: 10000,
         connectTimeoutMS: 10000,
         maxPoolSize: 10,
@@ -54,7 +66,6 @@ async function connectDB() {
       .catch((error) => {
         connectionPromise = null;
 
-        // Log diagnostic details without logging credentials
         console.error("MongoDB connection failed:", {
           name: error.name,
           message: error.message,
