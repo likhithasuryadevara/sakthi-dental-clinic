@@ -9,15 +9,65 @@ const ContactEnquiry = require("./models/ContactEnquiry");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
+// CORS configuration
+const allowedOrigins = [
+  "http://localhost:5173",
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Not allowed by CORS"));
+    },
   })
 );
+
 app.use(express.json({ limit: "10kb" }));
 
-// Health check route
+// MongoDB connection cache for Vercel
+let connectionPromise = null;
+
+async function connectDB() {
+  if (mongoose.connection.readyState === 1) {
+    return;
+  }
+
+  if (!process.env.MONGODB_URI) {
+    throw new Error("MONGODB_URI is missing");
+  }
+
+  if (!connectionPromise) {
+    connectionPromise = mongoose
+      .connect(process.env.MONGODB_URI)
+      .catch((error) => {
+        connectionPromise = null;
+        throw error;
+      });
+  }
+
+  await connectionPromise;
+}
+
+// Connect to MongoDB before API requests
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error("MongoDB connection failed:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Database connection failed.",
+    });
+  }
+});
+
+// Health check
 app.get("/api/health", (req, res) => {
   res.json({
     success: true,
@@ -29,12 +79,11 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Contact form route
+// Contact form
 app.post("/api/contact", async (req, res) => {
   try {
     const { name, email, phone, message } = req.body || {};
 
-    // Validate required fields
     if (
       typeof name !== "string" ||
       !name.trim() ||
@@ -49,7 +98,6 @@ app.post("/api/contact", async (req, res) => {
       });
     }
 
-    // Validate email
     const validEmail =
       /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
@@ -60,7 +108,6 @@ app.post("/api/contact", async (req, res) => {
       });
     }
 
-    // Validate phone
     const validPhone = /^[+()\d\s-]{7,20}$/.test(phone.trim());
 
     if (!validPhone) {
@@ -70,22 +117,16 @@ app.post("/api/contact", async (req, res) => {
       });
     }
 
-    // Validate optional message
-    if (message !== undefined && typeof message !== "string") {
+    if (
+      message !== undefined &&
+      (typeof message !== "string" || message.trim().length > 2000)
+    ) {
       return res.status(400).json({
         success: false,
         message: "Please provide a valid message.",
       });
     }
 
-    if (typeof message === "string" && message.trim().length > 2000) {
-      return res.status(400).json({
-        success: false,
-        message: "Message must be 2000 characters or fewer.",
-      });
-    }
-
-    // Save enquiry to MongoDB
     const enquiry = await ContactEnquiry.create({
       name: name.trim(),
       email: email.trim(),
@@ -102,13 +143,6 @@ app.post("/api/contact", async (req, res) => {
   } catch (error) {
     console.error("Contact enquiry error:", error.message);
 
-    if (error.name === "ValidationError") {
-      return res.status(400).json({
-        success: false,
-        message: "Please check the contact details you provided.",
-      });
-    }
-
     return res.status(500).json({
       success: false,
       message: "Unable to save your enquiry. Please try again later.",
@@ -116,24 +150,21 @@ app.post("/api/contact", async (req, res) => {
   }
 });
 
-// Connect to MongoDB, then start the server
-async function startServer() {
-  if (!process.env.MONGODB_URI) {
-    console.error("MONGODB_URI is missing from the server .env file.");
-    process.exit(1);
-  }
+// Local development only
+if (require.main === module) {
+  connectDB()
+    .then(() => {
+      console.log("MongoDB connected successfully.");
 
-  try {
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log("MongoDB connected successfully.");
-
-    app.listen(PORT, () => {
-      console.log(`Server running at http://localhost:${PORT}`);
+      app.listen(PORT, () => {
+        console.log(`Server running at http://localhost:${PORT}`);
+      });
+    })
+    .catch((error) => {
+      console.error("MongoDB connection failed:", error.message);
+      process.exit(1);
     });
-  } catch (error) {
-    console.error("MongoDB connection failed:", error.message);
-    process.exit(1);
-  }
 }
 
-startServer();
+// Export Express app for Vercel
+module.exports = app;
