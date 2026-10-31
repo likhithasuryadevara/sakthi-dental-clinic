@@ -29,7 +29,7 @@ app.use(
 
 app.use(express.json({ limit: "10kb" }));
 
-// MongoDB connection cache for Vercel
+// MongoDB connection cache
 let connectionPromise = null;
 
 async function connectDB() {
@@ -38,14 +38,29 @@ async function connectDB() {
   }
 
   if (!process.env.MONGODB_URI) {
-    throw new Error("MONGODB_URI is missing");
+    throw new Error("MONGODB_URI environment variable is missing");
   }
 
   if (!connectionPromise) {
     connectionPromise = mongoose
-      .connect(process.env.MONGODB_URI)
+      .connect(process.env.MONGODB_URI, {
+        serverSelectionTimeoutMS: 10000,
+        connectTimeoutMS: 10000,
+        maxPoolSize: 10,
+      })
+      .then(() => {
+        console.log("MongoDB connected successfully");
+      })
       .catch((error) => {
         connectionPromise = null;
+
+        // Log diagnostic details without logging credentials
+        console.error("MongoDB connection failed:", {
+          name: error.name,
+          message: error.message,
+          code: error.code,
+        });
+
         throw error;
       });
   }
@@ -59,8 +74,9 @@ app.use(async (req, res, next) => {
     await connectDB();
     next();
   } catch (error) {
-    console.error("MongoDB connection failed:", error.message);
-    res.status(500).json({
+    console.error("Database middleware error:", error.message);
+
+    return res.status(500).json({
       success: false,
       message: "Database connection failed.",
     });
@@ -69,7 +85,7 @@ app.use(async (req, res, next) => {
 
 // Health check
 app.get("/api/health", (req, res) => {
-  res.json({
+  res.status(200).json({
     success: true,
     message: "Sakthi Dental Clinic API is running!",
     database:
@@ -119,7 +135,8 @@ app.post("/api/contact", async (req, res) => {
 
     if (
       message !== undefined &&
-      (typeof message !== "string" || message.trim().length > 2000)
+      (typeof message !== "string" ||
+        message.trim().length > 2000)
     ) {
       return res.status(400).json({
         success: false,
@@ -131,7 +148,8 @@ app.post("/api/contact", async (req, res) => {
       name: name.trim(),
       email: email.trim(),
       phone: phone.trim(),
-      message: typeof message === "string" ? message.trim() : "",
+      message:
+        typeof message === "string" ? message.trim() : "",
     });
 
     console.log("Contact enquiry saved:", enquiry._id);
@@ -141,7 +159,10 @@ app.post("/api/contact", async (req, res) => {
       message: "Your enquiry was received successfully.",
     });
   } catch (error) {
-    console.error("Contact enquiry error:", error.message);
+    console.error("Contact enquiry error:", {
+      name: error.name,
+      message: error.message,
+    });
 
     return res.status(500).json({
       success: false,
@@ -154,14 +175,12 @@ app.post("/api/contact", async (req, res) => {
 if (require.main === module) {
   connectDB()
     .then(() => {
-      console.log("MongoDB connected successfully.");
-
       app.listen(PORT, () => {
         console.log(`Server running at http://localhost:${PORT}`);
       });
     })
     .catch((error) => {
-      console.error("MongoDB connection failed:", error.message);
+      console.error("Local server startup failed:", error.message);
       process.exit(1);
     });
 }
